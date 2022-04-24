@@ -1,0 +1,117 @@
+---
+title: "NYPD Shooting Incident Data (Historic)"
+output: pdf_document
+---
+
+## Description of the Data
+
+The NYPD Shooting Incident Data (Historic) is data regarding every shooting incident in New York City starting in 2006 and ending in 2020. The data set includes information about where the shooting occurred, when it occurred, details about the event, and details about the victim and shooter.
+
+## Importing the Data
+
+The following code is used to download the NYPD shootings file from NYC's government website as a CSV and then read it into R as the variable shootings. It also reads in the relevant packages.
+
+```{r importing, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+download.file("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD",
+    destfile = "shootings.csv")
+shootings <- read.csv("shootings.csv")
+```
+
+## Examining and Tidying the Data
+
+Running the following code will display a various summaries of the data set:
+
+```{r summary}
+summary(shootings)
+str(shootings)
+head(shootings)
+```
+
+From this, we can see the `OCCUR_DATE` and `OCCUR_TIME` are characters, so we'll combine them and make them a date-time POSIXct variable. The `PRECINT` should be changed from integer to factor. The `JURISDICTION_CODE` seems to be mostly zeroes so isn't providing much useful information, so we'll get rid of it. `BORO`, `LOCATION_DESC`, `PERP_AGE_GROUP`, `PERP_SEX`, `PERP_RACE`, `VIC_AGE_GROUP`, `VIC_SEX`, `VIC_RACE` should all be changed from character strings to factors. We'll also get rid of `X_COORD_CD`, `Y_COORD_CD`, and `Lon_Lat` since `Latitude` and `Longitude` can pinpoint the shooting location. Applying these modifications:
+
+```{r transform}
+shootings <- select(shootings, -c(JURISDICTION_CODE, X_COORD_CD, Y_COORD_CD, Lon_Lat))
+
+factor_cols <- c("BORO", "PRECINCT", "LOCATION_DESC", "PERP_AGE_GROUP", "PERP_SEX", 
+                 "PERP_RACE", "VIC_AGE_GROUP", "VIC_SEX", "VIC_RACE")
+shootings[factor_cols] <- lapply(shootings[factor_cols], as.factor)
+
+shootings$DATE_TIME <- apply(shootings[, c("OCCUR_DATE", "OCCUR_TIME")], 1, 
+                             paste, collapse = " ")
+shootings <- select(shootings, -c(OCCUR_DATE, OCCUR_TIME))
+shootings$DATE_TIME <- mdy_hms(shootings$DATE_TIME)
+
+```
+
+Now we have data in a tidier format, and we can move on to exploring the data through visualization.
+
+## Visualizing the Data
+
+We can plot the data in different ways to tell different stories about the data. There is some amount of missing data in some variables, so we will focus on those variables with complete data. If we wanted to do any analysis on the variables with missing data, we would need to decide how to handle the missing observations. We would need to know if the observations were missing at random, not at random, or completely at random to start making those decisions.
+
+On to the first visualization.
+
+```{r viz_byyearmonth}
+shootings$YEAR <- as.factor(format(shootings$DATE_TIME, format = "%Y"))
+shootings$MONTH <- as.factor(format(shootings$DATE_TIME, format = "%m"))
+ggplot(shootings, aes(YEAR, fill = MONTH)) + 
+    geom_bar() + geom_hline(yintercept = sum(shootings$YEAR == "2020"))
+```
+
+From the plot above we can see that, unfortunately, while shooting incidents had been going down over time, they rocketed up in 2020. In fact they were higher than every year going back to 2008, which just edged out 2020 (`r sum(shootings$YEAR == "2020")` in 2020 vs. `r sum(shootings$YEAR == "2008")` in 2008). We know that the COVID pandemic hit New York pretty hard in 2020. Does the onset of the pandemic in March correlate with an increase in shootings?
+
+```{r shootings_2020}
+ggplot(shootings[shootings$YEAR == "2020", ], aes(MONTH)) +
+    stat_count()
+```
+
+It looks like the summer is when there really started being a high amount of shootings. It took a few months after the pandemic for shootings to really increase, but if we look at the total by month of all years in the data set, we see (a less extreme version of) the same trend.
+
+```{r shootings_bymonth}
+ggplot(shootings, aes(MONTH)) +
+    stat_count()
+```
+
+We would probably want to do more research to determine why shootings were so much higher in 2020. For one more visualization, let's look at which borough has the most shootings and murders.
+
+```{r boro_murder}
+ggplot(shootings, aes(BORO, fill = STATISTICAL_MURDER_FLAG)) +
+    geom_bar() +
+    coord_flip()
+```
+So it looks like Brooklyn is the most dangerous borough, in terms of overall likelihood to get shot and to get murdered. However, we could normalize by population if we had those numbers, which might tell a slightly different story if Brooklyn has so many more people than any of the other boroughs.
+
+## Model
+
+We could run a quick model of shootings by time of day. We'll use a polynomial since there is a curve, incrasing from about 7 am to about 12 am and then decreasing.
+
+```{r model}
+shootings_by_hour_of_day <- shootings %>%
+    group_by(hour(DATE_TIME)) %>%
+    count()
+model <- lm(shootings_by_hour_of_day$n ~ poly(shootings_by_hour_of_day$`hour(DATE_TIME)`, 4))
+plot(shootings_by_hour_of_day)
+lines(predict(model, shootings_by_hour_of_day))
+
+```
+
+We can see the curve resembles the actual values, but the fit isn't perfect and we would possibly want to consider using a different type of regression or adding more variables to the model.
+
+
+## Sources of Bias
+
+Since this data set comes from the NYPD, any shootings that weren't reported to the police wouldn't be captured. If a shooting that fits a certain pattern or multiple patterns goes unreported, that could bias the data.
+
+## Conclusion
+
+This data set is an extensive look at NYPD-reported shootings in New York. Many conclusions can be drawn from it, but we must be judicious in drawing conclusions since there many be many outside factors that aren't captured in this data. We can see from the visualizations presented above that 2020 was an outlier year, bucking the downward trend of the previous twelve years. This could warrant further research into 
+what happened in 2020 to lead to such an increase, whether it was the pandemic or otherwise.
+
+Finally, a map of all the shootings by coordinates in the data set.
+
+```{r map}
+ggplot(shootings, aes(Latitude, Longitude)) + geom_point() + coord_fixed()
+```
